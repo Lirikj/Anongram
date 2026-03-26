@@ -469,12 +469,16 @@ def main_card_text(user_id: int) -> str:
         '🧷 <b>Anongram</b>\n\n'
         'Твоя анонимная ссылка:\n'
         f'{build_link(user_id)}\n\n'
-        '<b>Что тут происходит?</b>\n'
-        '• сюда приходят анонимные сообщения\n'
-        '• здесь появляются запросы на чат\n'
+        '<b>Как это работает?</b>\n'
+        '1. Отправь эту ссылку человеку.\n'
+        '2. Он сможет написать тебе анонимно.\n'
+        '3. Когда придёт сообщение, ты сможешь ответить или открыть анонимный чат.\n\n'
+        '<b>Важно:</b>\n'
+        '• сюда приходят анонимные сообщения и запросы на чат\n'
         '• отдельные диалоги открываются в тредах\n'
-        '• /stop закрывает такой тред у обоих\n'
-        '• кнопка ниже копирует ссылку'
+        '• команда /stop закрывает такой тред у обоих\n'
+        '• если чат очищен, просто нажми /start и я снова покажу ссылку\n\n'
+        'Кнопка ниже помогает быстро скопировать ссылку.'
     )
 
 
@@ -484,37 +488,29 @@ def ensure_main_card(user_id: int, *, force_new: bool = False) -> int:
     reply_markup = main_menu_markup(build_link(user_id))
     existing_message_id = get_main_message_id(user_id)
     message_id: Optional[int] = None
-    created_new_message = False
+    should_pin = existing_message_id is None
 
-    if force_new and existing_message_id:
-        safe_delete_message(user_id, existing_message_id)
-        set_main_message_id(user_id, None)
-        existing_message_id = None
-
-    if existing_message_id and not force_new:
-        if not update_main_message(
+    if existing_message_id:
+        if update_main_message(
             user_id,
             existing_message_id,
             text,
             reply_markup=reply_markup,
             disable_web_page_preview=True,
         ):
-            set_main_message_id(user_id, None)
-        else:
-            message_id = existing_message_id
+            return int(existing_message_id)
+        set_main_message_id(user_id, None)
 
-    if not message_id:
-        sent = send_raw_to_main(
-            user_id,
-            text,
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-        message_id = sent.message_id
-        set_main_message_id(user_id, message_id)
-        created_new_message = True
+    sent = send_raw_to_main(
+        user_id,
+        text,
+        reply_markup=reply_markup,
+        disable_web_page_preview=True,
+    )
+    message_id = sent.message_id
+    set_main_message_id(user_id, message_id)
 
-    if created_new_message:
+    if should_pin:
         try:
             bot.pin_chat_message(user_id, message_id, disable_notification=True)
         except apihelper.ApiTelegramException:
@@ -808,16 +804,32 @@ def participant_threads(conversation, chat_id: int) -> Tuple[int, int, int]:
     return conversation['guest_thread_id'], conversation['owner_thread_id'], conversation['owner_id']
 
 
-def announce_chat_opened(user_id: int, thread_id: int, topic_code: str) -> None:
-    bot.send_message(
+def announce_chat_opened(user_id: int, thread_id: int, topic_code: str) -> Optional[int]:
+    message = bot.send_message(
         user_id,
         system_text(
             f'Диалог {topic_code} открыт',
-            'Это отдельный анонимный тред. Обычные сообщения собеседника будут приходить ниже как есть, а мои технические подсказки будут выделены отдельно. Команда /stop закроет этот тред для обеих сторон.',
+            'Это отдельный анонимный тред. Сообщения собеседника будут приходить ниже. Если захочешь закончить диалог, отправь /stop.',
             '🤝',
         ),
         message_thread_id=thread_id,
     )
+    return message.message_id
+
+
+def update_thread_status_message(user_id: int, thread_id: int, message_id: Optional[int], text: str) -> None:
+    if not message_id:
+        bot.send_message(user_id, text, message_thread_id=thread_id)
+        return
+
+    try:
+        bot.edit_message_text(
+            text=text,
+            chat_id=user_id,
+            message_id=message_id,
+        )
+    except apihelper.ApiTelegramException:
+        bot.send_message(user_id, text, message_thread_id=thread_id)
 
 
 def create_private_topics(first_user_id: int, second_user_id: int, topic_code: str):
@@ -843,17 +855,19 @@ def open_or_reuse_conversation(first_user_id: int, second_user_id: int, request_
         second_user_id,
         second_topic.message_thread_id,
     )
+    owner_status_message_id = announce_chat_opened(first_user_id, first_topic.message_thread_id, topic_code)
+    guest_status_message_id = announce_chat_opened(second_user_id, second_topic.message_thread_id, topic_code)
     create_conversation(
         owner_id=owner_id,
         guest_id=guest_id,
         emoji=topic_code,
         owner_thread_id=owner_thread_id,
         guest_thread_id=guest_thread_id,
+        owner_status_message_id=(owner_status_message_id if owner_id == first_user_id else guest_status_message_id),
+        guest_status_message_id=(guest_status_message_id if guest_id == second_user_id else owner_status_message_id),
         request_id=request_id,
     )
     conversation = get_active_conversation(first_user_id, second_user_id)
-    announce_chat_opened(first_user_id, first_topic.message_thread_id, topic_code)
-    announce_chat_opened(second_user_id, second_topic.message_thread_id, topic_code)
     return conversation, True
 
 
@@ -975,10 +989,32 @@ def sync_closed_request_cards(conversation) -> None:
     )
 
 
+def sync_closed_topic_messages(conversation) -> None:
+    topic_code = conversation['emoji']
+    closed_text = system_text(
+        f'Диалог {topic_code} закрыт',
+        'Этот анонимный тред закрыт для обеих сторон. Если захотите продолжить общение позже, нужно открыть новый чат.',
+        '🔒',
+    )
+
+    update_thread_status_message(
+        conversation['owner_id'],
+        conversation['owner_thread_id'],
+        conversation['owner_status_message_id'],
+        closed_text,
+    )
+    update_thread_status_message(
+        conversation['guest_id'],
+        conversation['guest_thread_id'],
+        conversation['guest_status_message_id'],
+        closed_text,
+    )
+
+
 @bot.message_handler(commands=['start'])
 def start(message: types.Message) -> None:
     sync_user(message.from_user)
-    ensure_main_card(message.chat.id, force_new=True)
+    ensure_main_card(message.chat.id)
     clear_prompt_state(message.from_user.id)
     clear_root_notice(message.chat.id)
 
@@ -1011,6 +1047,7 @@ def stop_chat(message: types.Message) -> None:
         close_conversation(conversation['id'])
 
     sync_closed_request_cards(conversation)
+    sync_closed_topic_messages(conversation)
 
     cleanup_complete = owner_closed and guest_closed
     owner_id = conversation['owner_id']

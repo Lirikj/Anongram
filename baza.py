@@ -42,6 +42,8 @@ CONVERSATION_COLUMNS = {
     'emoji',
     'owner_thread_id',
     'guest_thread_id',
+    'owner_status_message_id',
+    'guest_status_message_id',
     'request_id',
     'status',
     'created_at',
@@ -202,6 +204,8 @@ def init_db() -> None:
 
         missing_conversations = CONVERSATION_COLUMNS - _table_columns(conn, 'conversations')
         alter_conversations_map = {
+            'owner_status_message_id': 'ALTER TABLE conversations ADD COLUMN owner_status_message_id INTEGER',
+            'guest_status_message_id': 'ALTER TABLE conversations ADD COLUMN guest_status_message_id INTEGER',
             'request_id': 'ALTER TABLE conversations ADD COLUMN request_id INTEGER',
         }
         for column in missing_conversations:
@@ -514,6 +518,8 @@ def create_conversation(
     emoji: str,
     owner_thread_id: int,
     guest_thread_id: int,
+    owner_status_message_id: Optional[int] = None,
+    guest_status_message_id: Optional[int] = None,
     request_id: Optional[int] = None,
 ) -> int:
     with _connect() as conn:
@@ -525,12 +531,23 @@ def create_conversation(
                 emoji,
                 owner_thread_id,
                 guest_thread_id,
+                owner_status_message_id,
+                guest_status_message_id,
                 request_id,
                 status
             )
-            VALUES (?, ?, ?, ?, ?, ?, 'active')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
             ''',
-            (owner_id, guest_id, emoji, owner_thread_id, guest_thread_id, request_id),
+            (
+                owner_id,
+                guest_id,
+                emoji,
+                owner_thread_id,
+                guest_thread_id,
+                owner_status_message_id,
+                guest_status_message_id,
+                request_id,
+            ),
         )
         return int(cursor.lastrowid)
 
