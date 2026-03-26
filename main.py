@@ -487,8 +487,6 @@ def ensure_main_card(user_id: int, *, force_new: bool = False) -> int:
     text = main_card_text(user_id)
     reply_markup = main_menu_markup(build_link(user_id))
     existing_message_id = get_main_message_id(user_id)
-    message_id: Optional[int] = None
-    should_pin = existing_message_id is None
 
     if existing_message_id:
         if update_main_message(
@@ -507,16 +505,8 @@ def ensure_main_card(user_id: int, *, force_new: bool = False) -> int:
         reply_markup=reply_markup,
         disable_web_page_preview=True,
     )
-    message_id = sent.message_id
-    set_main_message_id(user_id, message_id)
-
-    if should_pin:
-        try:
-            bot.pin_chat_message(user_id, message_id, disable_notification=True)
-        except apihelper.ApiTelegramException:
-            pass
-
-    return int(message_id)
+    set_main_message_id(user_id, sent.message_id)
+    return int(sent.message_id)
 
 
 def trim_text(value: str, limit: int = 700) -> str:
