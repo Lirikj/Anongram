@@ -1004,17 +1004,17 @@ def sync_closed_topic_messages(conversation) -> None:
 @bot.message_handler(commands=['start'])
 def start(message: types.Message) -> None:
     sync_user(message.from_user)
-    ensure_main_card(message.chat.id)
     clear_prompt_state(message.from_user.id)
     clear_root_notice(message.chat.id)
 
     token = extract_start_token(message.text)
-    if token is None:
+    if token is not None:
+        if not resolve_link_entry(message.from_user.id, token):
+            send_root_notice(message.chat.id, 'Ссылка не сработала', 'Похоже, что этот deep link повреждён или устарел.', emoji='⚠️')
         safe_delete_message(message.chat.id, message.message_id)
         return
 
-    if not resolve_link_entry(message.from_user.id, token):
-        send_root_notice(message.chat.id, 'Ссылка не сработала', 'Похоже, что этот deep link повреждён или устарел.', emoji='⚠️')
+    ensure_main_card(message.chat.id)
     safe_delete_message(message.chat.id, message.message_id)
 
 
