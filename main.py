@@ -1,4 +1,8 @@
 from html import escape
+import atexit
+import fcntl
+import os
+import sys
 import time
 from typing import Optional, Tuple
 from urllib.parse import parse_qs, urlparse
@@ -71,6 +75,7 @@ CAPTIONABLE_ONE_OFF_TYPES = {
     'voice',
 }
 BOT_USERNAME: Optional[str] = None
+INSTANCE_LOCK = None
 
 
 def sync_user(tg_user: types.User) -> bool:
@@ -1194,6 +1199,34 @@ def bootstrap(bot_instance: TeleBot) -> None:
         pass
 
 
+def acquire_instance_lock() -> None:
+    global INSTANCE_LOCK
+    lock_path = os.path.join(os.path.dirname(__file__), 'anongram.lock')
+    lock_file = open(lock_path, 'w')
+
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print('Anongram уже запущен в другом процессе. Второй экземпляр завершён.', flush=True)
+        sys.exit(0)
+
+    lock_file.write(str(os.getpid()))
+    lock_file.flush()
+    INSTANCE_LOCK = lock_file
+
+    def _cleanup_lock() -> None:
+        try:
+            lock_file.seek(0)
+            lock_file.truncate()
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+        except Exception:
+            pass
+
+    atexit.register(_cleanup_lock)
+
+
 if __name__ == '__main__':
+    acquire_instance_lock()
     bootstrap(bot)
     bot.infinity_polling(skip_pending=True, allowed_updates=util.update_types)
